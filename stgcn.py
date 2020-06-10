@@ -1,130 +1,117 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.nn.functional as F
 
 
-class TimeBlock(nn.Module):
-    """
-    Neural network block that applies a temporal convolution to each node of
-    a graph in isolation.
-    """
+class Align(nn.Module):
+    def __init__(self, c_in, c_out):
+        super(Align, self).__init__()
+        self.c_in = c_in
+        self.c_out = c_out
+        if c_in > c_out:
+            self.conv1x1 = nn.Conv2d(c_in, c_out, 1)
 
-    def __init__(self, in_channels, out_channels, kernel_size=3):
-        """
-        :param in_channels: Number of input features at each node in each time
-        step.
-        :param out_channels: Desired number of output channels at each node in
-        each time step.
-        :param kernel_size: Size of the 1D temporal kernel.
-        """
-        super(TimeBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, (1, kernel_size))
-        self.conv2 = nn.Conv2d(in_channels, out_channels, (1, kernel_size))
-        self.conv3 = nn.Conv2d(in_channels, out_channels, (1, kernel_size))
-
-    def forward(self, X):
-        """
-        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
-        num_features=in_channels)
-        :return: Output data of shape (batch_size, num_nodes,
-        num_timesteps_out, num_features_out=out_channels)
-        """
-        # Convert into NCHW format for pytorch to perform convolutions.
-        X = X.permute(0, 3, 1, 2)
-        temp = self.conv1(X) + torch.sigmoid(self.conv2(X))
-        out = F.relu(temp + self.conv3(X))
-        # Convert back from NCHW to NHWC
-        out = out.permute(0, 2, 3, 1)
-        return out
+    def forward(self, x):
+        if self.c_in > self.c_out:
+            return self.conv1x1(x)
+        if self.c_in < self.c_out:
+            return F.pad(x, [0, 0, 0, 0, 0, self.c_out - self.c_in, 0, 0])
+        return x
 
 
-class STGCNBlock(nn.Module):
-    """
-    Neural network block that applies a temporal convolution on each node in
-    isolation, followed by a graph convolution, followed by another temporal
-    convolution on each node.
-    """
+class TemporalConv(nn.Module):
+    def __init__(self, kt, c_in, c_out, act="relu"):
+        super(TemporalConv, self).__init__()
+        self.kt = kt
+        self.act = act
+        self.c_out = c_out
+        self.align = Align(c_in, c_out)
+        if self.act == "GLU":
+            self.conv = nn.Conv2d(c_in, c_out * 2, (kt, 1), 1)
+        else:
+            self.conv = nn.Conv2d(c_in, c_out, (kt, 1), 1)
 
-    def __init__(self, in_channels, spatial_channels, out_channels,
-                 num_nodes):
-        """
-        :param in_channels: Number of input features at each node in each time
-        step.
-        :param spatial_channels: Number of output channels of the graph
-        convolutional, spatial sub-block.
-        :param out_channels: Desired number of output features at each node in
-        each time step.
-        :param num_nodes: Number of nodes in the graph.
-        """
-        super(STGCNBlock, self).__init__()
-        self.temporal1 = TimeBlock(in_channels=in_channels,
-                                   out_channels=out_channels)
-        self.Theta1 = nn.Parameter(torch.FloatTensor(out_channels,
-                                                     spatial_channels))
-        self.temporal2 = TimeBlock(in_channels=spatial_channels,
-                                   out_channels=out_channels)
-        self.batch_norm = nn.BatchNorm2d(num_nodes)
+    def forward(self, x):
+        x_in = self.align(x)[:, :, self.kt - 1:, :]
+        if self.act == "GLU":
+            x_conv = self.conv(x)
+            return (x_conv[:, :self.c_out, :, :] + x_in) * torch.sigmoid(x_conv[:, self.c_out:, :, :])
+        if self.act == "sigmoid":
+            return torch.sigmoid(self.conv(x) + x_in)
+        return torch.relu(self.conv(x) + x_in)
+
+
+class SpatioConv(nn.Module):
+    def __init__(self, ks, c, Lk):
+        super(SpatioConv, self).__init__()
+        self.Lk = Lk
+        self.theta = nn.Parameter(torch.FloatTensor(c, c, ks))
+        self.b = nn.Parameter(torch.FloatTensor(1, c, 1, 1))
         self.reset_parameters()
 
     def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.Theta1.shape[1])
-        self.Theta1.data.uniform_(-stdv, stdv)
+        init.kaiming_uniform_(self.theta, a=math.sqrt(5))
+        fan_in, _ = init._calculate_fan_in_and_fan_out(self.theta)
+        bound = 1 / math.sqrt(fan_in)
+        init.uniform_(self.b, -bound, bound)
 
-    def forward(self, X, A_hat):
-        """
-        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
-        num_features=in_channels).
-        :param A_hat: Normalized adjacency matrix.
-        :return: Output data of shape (batch_size, num_nodes,
-        num_timesteps_out, num_features=out_channels).
-        """
-        t = self.temporal1(X)
-        lfs = torch.einsum("ij,jklm->kilm", [A_hat, t.permute(1, 0, 2, 3)])
-        # t2 = F.relu(torch.einsum("ijkl,lp->ijkp", [lfs, self.Theta1]))
-        t2 = F.relu(torch.matmul(lfs, self.Theta1))
-        t3 = self.temporal2(t2)
-        return self.batch_norm(t3)
-        # return t3
+    def forward(self, x):
+        x_c = torch.einsum("knm,bitm->bitkn", self.Lk, x)
+        x_gc = torch.einsum("iok,bitkn->botn", self.theta, x_c) + self.b
+        return torch.relu(x_gc + x)
+
+
+class STConvBlock(nn.Module):
+    def __init__(self, ks, kt, n, c, p, Lk):
+        super(STConvBlock, self).__init__()
+        self.tconv1 = TemporalConv(kt, c[0], c[1], "GLU")
+        self.sconv = SpatioConv(ks, c[1], Lk)
+        self.tconv2 = TemporalConv(kt, c[1], c[2])
+        self.ln = nn.LayerNorm([n, c[2]])
+        self.dropout = nn.Dropout(p)
+
+    def forward(self, x):
+        x_t1 = self.tconv1(x)
+        x_s = self.sconv(x_t1)
+        x_t2 = self.tconv2(x_s)
+        x_ln = self.ln(x_t2.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return self.dropout(x_ln)
+
+
+class FullyConv(nn.Module):
+    def __init__(self, c):
+        super(FullyConv, self).__init__()
+        self.conv = nn.Conv2d(c, 1, 1)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class OutLayer(nn.Module):
+    def __init__(self, c, T, n):
+        super(OutLayer, self).__init__()
+        self.tconv1 = TemporalConv(T, c, c, "GLU")
+        self.ln = nn.LayerNorm([n, c])
+        self.tconv2 = TemporalConv(1, c, c, "sigmoid")
+        self.fc = FullyConv(c)
+
+    def forward(self, x):
+        x_t1 = self.tconv1(x)
+        x_ln = self.ln(x_t1.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        x_t2 = self.tconv2(x_ln)
+        return self.fc(x_t2)
 
 
 class STGCN(nn.Module):
-    """
-    Spatio-temporal graph convolutional network as described in
-    https://arxiv.org/abs/1709.04875v3 by Yu et al.
-    Input should have shape (batch_size, num_nodes, num_input_time_steps,
-    num_features).
-    """
-
-    def __init__(self, num_nodes, num_features, num_timesteps_input,
-                 num_timesteps_output):
-        """
-        :param num_nodes: Number of nodes in the graph.
-        :param num_features: Number of features at each node in each time step.
-        :param num_timesteps_input: Number of past time steps fed into the
-        network.
-        :param num_timesteps_output: Desired number of future time steps
-        output by the network.
-        """
+    def __init__(self, ks, kt, bs, T, n, Lk, p):
         super(STGCN, self).__init__()
-        self.block1 = STGCNBlock(in_channels=num_features, out_channels=64,
-                                 spatial_channels=16, num_nodes=num_nodes)
-        self.block2 = STGCNBlock(in_channels=64, out_channels=64,
-                                 spatial_channels=16, num_nodes=num_nodes)
-        self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
-        self.fully = nn.Linear((num_timesteps_input - 2 * 5) * 64,
-                               num_timesteps_output)
+        self.st_conv1 = STConvBlock(ks, kt, n, bs[0], p, Lk)
+        self.st_conv2 = STConvBlock(ks, kt, n, bs[1], p, Lk)
+        self.output = OutLayer(bs[1][2], T - 4 * (kt - 1), n)
 
-    def forward(self, A_hat, X):
-        """
-        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
-        num_features=in_channels).
-        :param A_hat: Normalized adjacency matrix.
-        """
-        out1 = self.block1(X, A_hat)
-        out2 = self.block2(out1, A_hat)
-        out3 = self.last_temporal(out2)
-        out4 = self.fully(out3.reshape((out3.shape[0], out3.shape[1], -1)))
-        return out4
-
-
+    def forward(self, x):
+        x_st1 = self.st_conv1(x)
+        x_st2 = self.st_conv2(x_st1)
+        return self.output(x_st2)

@@ -1,73 +1,76 @@
-import os
-import zipfile
-import numpy as np
 import torch
+import numpy as np
 
 
-def load_metr_la_data():
-    if (not os.path.isfile("data/adj_mat.npy")
-            or not os.path.isfile("data/node_values.npy")):
-        with zipfile.ZipFile("data/METR-LA.zip", 'r') as zip_ref:
-            zip_ref.extractall("data/")
-
-    A = np.load("data/adj_mat.npy")
-    X = np.load("data/node_values.npy").transpose((1, 2, 0))
-    X = X.astype(np.float32)
-
-    # Normalization using Z-score method
-    means = np.mean(X, axis=(0, 2))
-    X = X - means.reshape(1, -1, 1)
-    stds = np.std(X, axis=(0, 2))
-    X = X / stds.reshape(1, -1, 1)
-
-    return A, X, means, stds
+def get_covariance(adj, tau, gamma):
+    if tau is None or gamma is None:
+        return None
+    L = np.diag(adj.sum(axis=0)) - adj
+    cov = tau * np.linalg.inv(L + gamma * np.eye(adj.shape[0]))
+    return torch.tensor(cov)
 
 
-def get_covariance(A, tau, gamma):
-    L = np.diag(A.sum(axis=0)) - A
-    sigma = tau * np.linalg.inv(L + gamma * np.eye(A.shape[0]))
-    return torch.tensor(sigma)
+def get_adjecency_matrix(weight, feature, rate=30):
+    n = feature.shape[0]
+    m = rate * n
+    d1 = weight.shape[1]
+
+    prod = feature.dot(weight)
+    logits = -np.linalg.norm(
+        prod.reshape(1, n, d1) - prod.reshape(n, 1, d1), axis=2
+    )
+    threshold = np.sort(logits.reshape(-1))[-m]
+    adj = (logits >= threshold).astype(float)
+    return adj
 
 
-def get_normalized_adj(A):
-    """
-    Returns the degree normalized adjacency matrix.
-    """
-    A = A + np.diag(np.ones(A.shape[0], dtype=np.float32))
-    D = np.array(np.sum(A, axis=1)).reshape((-1,))
-    D[D <= 10e-5] = 10e-5    # Prevent infs
-    diag = np.reciprocal(np.sqrt(D))
-    A_wave = np.multiply(np.multiply(diag.reshape((-1, 1)), A),
-                         diag.reshape((1, -1)))
-    return A_wave
+def scaled_laplacian(A):
+    n = A.shape[0]
+    d = np.sum(A, axis=1)
+    L = np.diag(d) - A
+    for i in range(n):
+        for j in range(n):
+            if d[i] > 0 and d[j] > 0:
+                L[i, j] /= np.sqrt(d[i] * d[j])
+    lam = np.max(np.linalg.eigvals(L)).real
+    return 2 * L / lam - np.eye(n)
 
 
-def generate_dataset(X, num_timesteps_input, num_timesteps_output):
-    """
-    Takes node features for the graph and divides them into multiple samples
-    along the time-axis by sliding a window of size (num_timesteps_input+
-    num_timesteps_output) across it in steps of 1.
-    :param X: Node features of shape (num_vertices, num_features,
-    num_timesteps)
-    :return:
-        - Node features divided into multiple samples. Shape is
-          (num_samples, num_vertices, num_features, num_timesteps_input).
-        - Node targets for the samples. Shape is
-          (num_samples, num_vertices, num_features, num_timesteps_output).
-    """
-    # Generate the beginning index and the ending index of a sample, which
-    # contains (num_points_for_training + num_points_for_predicting) points
-    indices = [(i, i + (num_timesteps_input + num_timesteps_output)) for i
-               in range(X.shape[2] - (
-                num_timesteps_input + num_timesteps_output) + 1)]
+def cheb_poly(L, Ks):
+    n = L.shape[0]
+    LL = [np.eye(n), L[:]]
+    for i in range(2, Ks):
+        LL.append(np.matmul(2 * L, LL[-1]) - LL[-2])
+    return np.asarray(LL)
 
-    # Save samples
-    features, target = [], []
-    for i, j in indices:
-        features.append(
-            X[:, :, i: i + num_timesteps_input].transpose(
-                (0, 2, 1)))
-        target.append(X[:, 0, i + num_timesteps_input: j])
 
-    return torch.from_numpy(np.array(features)), \
-           torch.from_numpy(np.array(target))
+def evaluate_model(model, loss_fn, data_iter, sigma):
+    model.eval()
+    l_sum, n = 0.0, 0
+    with torch.no_grad():
+        for x, y in data_iter:
+            y_pred = model(x).view(len(x), -1)
+            if hasattr(loss_fn, 'requires_cov'):
+                l = loss_fn(y_pred, y, sigma)
+            else:
+                l = loss_fn(y_pred, y)
+            l_sum += l.item() * y.shape[0]
+            n += y.shape[0]
+        return l_sum / n
+
+
+def evaluate_metric(model, data_iter, scaler):
+    model.eval()
+    with torch.no_grad():
+        mae, mape, mse = [], [], []
+        for x, y in data_iter:
+            y = scaler.inverse_transform(y.cpu().numpy()).reshape(-1)
+            y_pred = scaler.inverse_transform(model(x).view(len(x), -1).cpu().numpy()).reshape(-1)
+            d = np.abs(y - y_pred)
+            mae += d.tolist()
+            mape += (d / y).tolist()
+            mse += (d ** 2).tolist()
+        MAE = np.array(mae).mean()
+        MAPE = np.array(mape).mean()
+        RMSE = np.sqrt(np.array(mse).mean())
+        return MAE, MAPE, RMSE
