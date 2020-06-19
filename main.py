@@ -11,14 +11,16 @@ from utils import *
 from stgcn import *
 from GaussianCopula import CopulaLoss
 
+# CUDNN setup
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.enabled = False
+
 # Set random seed
 seed = 0
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 np.random.seed(seed)
 random.seed(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.enabled = False
 
 # Set device
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -36,11 +38,17 @@ save_path = "save/model.pt"
 day_slot = 288
 n_train, n_val, n_test = 34, 5, 5
 
+# M: the previous M traffic observations
 n_his = 12
+# H: the next H time steps(= 15*H min) to predict
 n_pred = 3
+# n: Number of monitor stations
 n_route = 228
+# K; Kernel size of spatial and temporal blocks
 Ks, Kt = 3, 3
+# bs: channel configs of ST-Conv blocks.
 blocks = [[1, 32, 64], [64, 32, 128]]
+# p: Drop rate of drop out layer
 drop_prob = 0
 
 batch_size = 50
@@ -48,17 +56,19 @@ epochs = 50
 lr = 1e-3
 
 loss_function = "mse"
+density = 30
 tau_list = [0.01, 0.1, 1]
 gamma_list = [0.1, 1]
 
 # Graph
+# W: weight adjacency matrix
 W = load_matrix(matrix_path)
+# L: Rescaled laplacian
 L = scaled_laplacian(W)
+# Theta: Kernel (ks, n_route, n_route)
 Lk = cheb_poly(L, Ks)
 Lk = torch.from_numpy(Lk).float().to(device)
-
-X = load_matrix(data_path)
-# A = get_adjecency_matrix(W, X)
+A = None
 
 # Standardization
 train, val, test = load_data(data_path, n_train * day_slot, n_val * day_slot)
@@ -74,7 +84,7 @@ x_test, y_test = data_transform(test, n_his, n_pred, day_slot, device)
 
 # Data Loader
 train_data = data.TensorDataset(x_train, y_train)
-train_iter = data.DataLoader(train_data, batch_size, shuffle=True)
+train_iter = data.DataLoader(train_data, batch_size, shuffle=False)
 val_data = data.TensorDataset(x_val, y_val)
 val_iter = data.DataLoader(val_data, batch_size)
 test_data = data.TensorDataset(x_test, y_test)
@@ -90,25 +100,31 @@ optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.7)
 
 df = {"tau": [], "gamma": [], "MAE": [], "MAPE": [], "RMSE": []}
+
 if loss_function == "mse":
     tau_list = [0.1]
     gamma_list = [0.1]
+else:
+    # Adjacency Matrix
+    A = get_adjecency_matrix(W, x_train, density)
 
 for tau in tau_list:
     for gamma in gamma_list:
         df["tau"].append(tau)
         df["gamma"].append(gamma)
-        # sigma = get_covariance(A, tau, gamma)
-        sigma = None
+        sigma = get_covariance(A, tau, gamma, device)
 
         # Training
         min_val_loss = np.inf
         for epoch in range(1, epochs + 1):
             loss_sum, n = 0.0, 0
             model.train()
+            iter = 0
             for x, y in train_iter:
                 y_pred = model(x).view(len(x), -1)
                 if hasattr(loss_fn, 'requires_cov'):
+                    sigma = slice_covariance(sigma, batch_size, iter)
+                    iter += 1
                     loss = loss_fn(y_pred, y, sigma)
                 else:
                     loss = loss_fn(y_pred, y)
@@ -119,7 +135,7 @@ for tau in tau_list:
                 loss_sum += loss_val * y.shape[0]
                 n += y.shape[0]
             scheduler.step()
-            val_loss = evaluate_model(model, loss_fn, val_iter, sigma)
+            val_loss = evaluate_model(model, loss_fn, val_iter, sigma, batch_size)
             if val_loss < min_val_loss:
                 min_val_loss = val_loss
                 torch.save(model.state_dict(), save_path)
@@ -128,7 +144,7 @@ for tau in tau_list:
         best_model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device)
         best_model.load_state_dict(torch.load(save_path))
 
-        loss = evaluate_model(best_model, loss_fn, test_iter, sigma)
+        loss = evaluate_model(best_model, loss_fn, test_iter, sigma, batch_size)
         MAE, MAPE, RMSE = evaluate_metric(best_model, test_iter, scaler)
         print("test loss:", loss, "\nMAE:", MAE, ", MAPE:", MAPE, ", RMSE:", RMSE)
         df["MAE"].append(MAE)

@@ -2,29 +2,74 @@ import torch
 import numpy as np
 
 
-def get_covariance(adj, tau, gamma):
-    if tau is None or gamma is None:
+def get_covariance(adj, tau, gamma, device):
+    if adj is None:
         return None
     L = np.diag(adj.sum(axis=0)) - adj
     cov = tau * np.linalg.inv(L + gamma * np.eye(adj.shape[0]))
-    return torch.tensor(cov)
+    return torch.Tensor(cov).to(device)
 
 
-def get_adjecency_matrix(weight, feature, rate=30):
+def slice_covariance(sigma, batch_size, iter):
+    n = sigma.shape[0]
+    lower = iter * batch_size
+    upper = min(n, lower + batch_size)
+    mask = torch.zeros(n).to(dtype=torch.bool)
+    mask[lower:upper] = True
+    return sigma[mask].t()[mask].t()
+
+
+"""
+def get_adjecency_matrix(weight, feature, device, density=30):
     n = feature.shape[0]
-    m = rate * n
-    d1 = weight.shape[1]
+    m = density * n
 
-    prod = feature.dot(weight)
-    logits = -np.linalg.norm(
-        prod.reshape(1, n, d1) - prod.reshape(n, 1, d1), axis=2
-    )
+    X = torch.squeeze(feature)            # (n, h, d0)
+    W = torch.Tensor(weight).to(device)   # (d0, d1)
+    prod = X.matmul(W)  # (n, h, d1)
+    logits = torch.zeros(n, n)
+    for i in range(n):
+        print(i)
+        for j in range(i + 1, n):
+            feat = prod[i] - prod[j]
+            logits[i][j] = -torch.norm(feat)
+            logits[j][i] = logits[i][j]
+    threshold = torch.sort(torch.reshape(logits, (-1,)))[-m]
+    adj = (logits >= threshold).astype(float)
+    return adj
+"""
+
+
+def get_adjecency_matrix(weight, feature, density=30):
+    """
+    weight(W): d0 * d1 (228 * 228)
+    feature(X): n * 1 * h * d0 (9316 * 1 * 12 * 228)
+    adj(A): n * n
+    """
+    n = feature.shape[0]
+    m = density * n
+
+    X = np.asarray(feature.to(device="cpu")).squeeze(axis=1)    # (n, h, d0)
+    prod = X.dot(weight)                                        # (n, h, d1)
+    logits = np.zeros((n, n))
+    for i in range(n):
+        if i % 200 == 0:
+            print(i)
+        for j in range(i + 1, n):
+            feat = prod[i] - prod[j]
+            logits[i][j] = -np.linalg.norm(feat)
+            logits[j][i] = logits[i][j]
     threshold = np.sort(logits.reshape(-1))[-m]
     adj = (logits >= threshold).astype(float)
+
     return adj
 
 
 def scaled_laplacian(A):
+    """
+    Calculate the rescaled laplacian given the weight matrix.
+    (Fomula above eq(3))
+    """
     n = A.shape[0]
     d = np.sum(A, axis=1)
     L = np.diag(d) - A
@@ -37,6 +82,9 @@ def scaled_laplacian(A):
 
 
 def cheb_poly(L, Ks):
+    """
+    Compute the chebyshev polynomial kernel
+    """
     n = L.shape[0]
     LL = [np.eye(n), L[:]]
     for i in range(2, Ks):
@@ -44,13 +92,16 @@ def cheb_poly(L, Ks):
     return np.asarray(LL)
 
 
-def evaluate_model(model, loss_fn, data_iter, sigma):
+def evaluate_model(model, loss_fn, data_iter, sigma, batch_size):
     model.eval()
     l_sum, n = 0.0, 0
     with torch.no_grad():
+        iter = 0
         for x, y in data_iter:
             y_pred = model(x).view(len(x), -1)
             if hasattr(loss_fn, 'requires_cov'):
+                sigma = slice_covariance(sigma, batch_size, iter)
+                iter += 1
                 l = loss_fn(y_pred, y, sigma)
             else:
                 l = loss_fn(y_pred, y)

@@ -4,6 +4,9 @@ import pandas as pd
 
 
 def load_matrix(file_path):
+    """
+    load matrix data from a csv file.
+    """
     return pd.read_csv(file_path, header=None).values.astype(float)
 
 
