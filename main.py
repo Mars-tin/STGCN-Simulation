@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from load_data import *
 from utils import *
 from stgcn import *
-from GaussianCopula import CopulaLoss
+from gaussian_copula import CopulaLoss
 
 # CUDNN setup
 torch.backends.cudnn.deterministic = True
@@ -122,6 +122,7 @@ for tau in tau_list:
             iter = 0
             for x, y in train_iter:
                 y_pred = model(x).view(len(x), -1)
+                X = x.numpy().squeeze()
                 if hasattr(loss_fn, 'requires_cov'):
                     sigma = slice_covariance(sigma, batch_size, iter)
                     iter += 1
