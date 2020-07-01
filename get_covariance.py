@@ -9,15 +9,19 @@ from load_data import *
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 # Unzip data
-if (not os.path.isfile("data/W_228.csv")
-        or not os.path.isfile("data/V_228.csv")):
-    with zipfile.ZipFile("data/PeMS-M.zip", 'r') as zip_ref:
-        zip_ref.extractall("data/")
 matrix_path = "data/W_228.csv"
 data_path = "data/V_228.csv"
 save_path = "data/A_228.csv"
 x_temp_path = "data/cov/x.csv"
 w_temp_path = "data/cov/w.csv"
+
+if (not os.path.isfile(matrix_path)
+        or not os.path.isfile(data_path)):
+    with zipfile.ZipFile("data/PeMS-M.zip", 'r') as zip_ref:
+        zip_ref.extractall("data/")
+
+if (os.path.isfile(save_path)):
+    os.remove(save_path)
 
 # Parameters
 day_slot = 288
@@ -37,7 +41,7 @@ n_x = x_train.shape[0]
 # Process data
 f = open(save_path, 'ab')
 for i, x in enumerate(x_train):
-    x = x.squeeze()
+    x = x.squeeze().to(device="cpu")
     x = x.t().matmul(x).numpy()
     np.savetxt(x_temp_path, x, delimiter=",")
     cmd = f'Rscript get_cov.R {x_temp_path} {w_temp_path} {rho} {n_his}'
