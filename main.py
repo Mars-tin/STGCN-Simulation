@@ -32,6 +32,7 @@ if (not os.path.isfile("data/W_228.csv")
         zip_ref.extractall("data/")
 matrix_path = "data/W_228.csv"
 data_path = "data/V_228.csv"
+adj_path = "data/cov_228.csv"
 save_path = "save/model.pt"
 
 # Parameters
@@ -68,7 +69,9 @@ L = scaled_laplacian(W)
 # Theta: Kernel (ks, n_route, n_route)
 Lk = cheb_poly(L, Ks)
 Lk = torch.from_numpy(Lk).float().to(device)
-A = None
+# cov: covariance of training data
+cov = load_matrix(adj_path)
+cov = cov.reshape((-1, n_route, n_route))
 
 # Standardization
 train, val, test = load_data(data_path, n_train * day_slot, n_val * day_slot)
@@ -81,6 +84,7 @@ test = scaler.transform(test)
 x_train, y_train = data_transform(train, n_his, n_pred, day_slot, device)
 x_val, y_val = data_transform(val, n_his, n_pred, day_slot, device)
 x_test, y_test = data_transform(test, n_his, n_pred, day_slot, device)
+resolution = x_train.shape[0] // (cov.shape[0] - 1)
 
 # Data Loader
 train_data = data.TensorDataset(x_train, y_train)
@@ -104,15 +108,11 @@ df = {"tau": [], "gamma": [], "MAE": [], "MAPE": [], "RMSE": []}
 if loss_function == "mse":
     tau_list = [0.1]
     gamma_list = [0.1]
-else:
-    # Adjacency Matrix
-    A = get_adjecency_matrix(W, x_train, density)
 
 for tau in tau_list:
     for gamma in gamma_list:
         df["tau"].append(tau)
         df["gamma"].append(gamma)
-        sigma = get_covariance(A, tau, gamma, device)
 
         # Training
         min_val_loss = np.inf
@@ -124,7 +124,7 @@ for tau in tau_list:
                 y_pred = model(x).view(len(x), -1)
                 X = x.numpy().squeeze()
                 if hasattr(loss_fn, 'requires_cov'):
-                    sigma = slice_covariance(sigma, batch_size, iter)
+                    sigma = slice_covariance(cov, resolution, batch_size, iter)
                     iter += 1
                     loss = loss_fn(y_pred, y, sigma)
                 else:
@@ -136,7 +136,7 @@ for tau in tau_list:
                 loss_sum += loss_val * y.shape[0]
                 n += y.shape[0]
             scheduler.step()
-            val_loss = evaluate_model(model, loss_fn, val_iter, sigma, batch_size)
+            val_loss = evaluate_model(model, loss_fn, val_iter, cov, resolution, batch_size)
             if val_loss < min_val_loss:
                 min_val_loss = val_loss
                 torch.save(model.state_dict(), save_path)
@@ -145,7 +145,7 @@ for tau in tau_list:
         best_model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device)
         best_model.load_state_dict(torch.load(save_path))
 
-        loss = evaluate_model(best_model, loss_fn, test_iter, sigma, batch_size)
+        loss = evaluate_model(best_model, loss_fn, test_iter, cov, resolution, batch_size)
         MAE, MAPE, RMSE = evaluate_metric(best_model, test_iter, scaler)
         print("test loss:", loss, "\nMAE:", MAE, ", MAPE:", MAPE, ", RMSE:", RMSE)
         df["MAE"].append(MAE)

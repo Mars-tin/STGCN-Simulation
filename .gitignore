@@ -13,6 +13,7 @@ __pycache__/
 .Python
 build/
 data/*.csv
+data/cov/
 save/
 develop-eggs/
 dist/

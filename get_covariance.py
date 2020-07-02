@@ -11,7 +11,7 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 # Unzip data
 matrix_path = "data/W_228.csv"
 data_path = "data/V_228.csv"
-save_path = "data/A_228.csv"
+save_path = "data/cov_228.csv"
 x_temp_path = "data/cov/x.csv"
 w_temp_path = "data/cov/w.csv"
 
@@ -30,6 +30,7 @@ n_his = 12
 n_pred = 3
 n_route = 228
 rho = 0.02
+resolution = 1000
 
 # Transform data
 train, _, _ = load_data(data_path, n_train * day_slot, n_val * day_slot)
@@ -40,12 +41,16 @@ n_x = x_train.shape[0]
 
 # Process data
 f = open(save_path, 'ab')
-for i, x in enumerate(x_train):
+for i in range(x_train.shape[0] // resolution):
+    start = i*resolution
+    end = min(x_train.shape[0], (i+1)*resolution)
+    idx = (start + end) // 2
+    x = x_train[idx]
     x = x.squeeze().to(device="cpu")
     x = x.t().matmul(x).numpy()
     np.savetxt(x_temp_path, x, delimiter=",")
     cmd = f'Rscript get_cov.R {x_temp_path} {w_temp_path} {rho} {n_his}'
-    print('Processing the {}th x in x_train...'.format(i))
+    print('Estimating covariance for the {}th-{}th x in x_train...'.format(start, end))
     os.system(cmd)
     cov = load_matrix(w_temp_path)
     cov = np.asarray(cov).squeeze()

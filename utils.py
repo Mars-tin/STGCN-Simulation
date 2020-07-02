@@ -2,15 +2,9 @@ import torch
 import numpy as np
 
 
-def get_covariance(adj, tau, gamma, device):
-    if adj is None:
-        return None
-    L = np.diag(adj.sum(axis=0)) - adj
-    cov = tau * np.linalg.inv(L + gamma * np.eye(adj.shape[0]))
-    return torch.Tensor(cov).to(device)
-
-
-def slice_covariance(sigma, batch_size, iter):
+def slice_covariance(cov, resolution, batch_size, iter):
+    idx = iter * batch_size // resolution
+    sigma = cov[idx]
     n = sigma.shape[0]
     lower = iter * batch_size
     upper = min(n, lower + batch_size)
@@ -92,7 +86,7 @@ def cheb_poly(L, Ks):
     return np.asarray(LL)
 
 
-def evaluate_model(model, loss_fn, data_iter, sigma, batch_size):
+def evaluate_model(model, loss_fn, data_iter, cov, resolution, batch_size):
     model.eval()
     l_sum, n = 0.0, 0
     with torch.no_grad():
@@ -100,7 +94,7 @@ def evaluate_model(model, loss_fn, data_iter, sigma, batch_size):
         for x, y in data_iter:
             y_pred = model(x).view(len(x), -1)
             if hasattr(loss_fn, 'requires_cov'):
-                sigma = slice_covariance(sigma, batch_size, iter)
+                sigma = slice_covariance(cov, resolution, batch_size, iter)
                 iter += 1
                 l = loss_fn(y_pred, y, sigma)
             else:
