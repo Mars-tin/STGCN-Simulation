@@ -5,7 +5,7 @@ from sklearn.preprocessing import StandardScaler
 from load_data import *
 
 
-def get_covariance():
+def get_covariance(rho=0.02, resolution=100, n_his=12):
     # Set device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -27,10 +27,7 @@ def get_covariance():
     # Parameters
     day_slot = 288
     n_train, n_val, n_test = 34, 5, 5
-    n_his = 12
     n_pred = 3
-    rho = 0.02
-    resolution = 1000
 
     # Transform data
     train, _, _ = load_data(data_path, n_train * day_slot, n_val * day_slot)

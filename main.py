@@ -25,18 +25,6 @@ random.seed(seed)
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 print(device)
 
-# Get files ready
-matrix_path = "data/W_228.csv"
-data_path = "data/V_228.csv"
-adj_path = "data/cov_228.csv"
-save_path = "save/model.pt"
-if (not os.path.isfile(matrix_path)
-        or not os.path.isfile(data_path)):
-    with zipfile.ZipFile("data/PeMS-M.zip", 'r') as zip_ref:
-        zip_ref.extractall("data/")
-if not os.path.isfile(adj_path):
-    get_covariance()
-
 # Parameters
 day_slot = 288
 n_train, n_val, n_test = 34, 5, 5
@@ -53,6 +41,22 @@ Ks, Kt = 3, 3
 blocks = [[1, 32, 64], [64, 32, 128]]
 # p: Drop rate of drop out layer
 drop_prob = 0
+rho = 0.02
+
+# Get files ready
+matrix_path = "data/W_228.csv"
+data_path = "data/V_228.csv"
+adj_path = "data/cov_228.csv"
+save_path = "save/model.pt"
+resolution = 100
+
+if (not os.path.isfile(matrix_path)
+        or not os.path.isfile(data_path)):
+    with zipfile.ZipFile("data/PeMS-M.zip", 'r') as zip_ref:
+        zip_ref.extractall("data/")
+if not os.path.isfile(adj_path):
+    get_covariance(rho=rho, resolution=resolution, n_his=n_his)
+
 
 batch_size = 50
 epochs = 50
@@ -86,7 +90,6 @@ test = scaler.transform(test)
 x_train, y_train = data_transform(train, n_his, n_pred, day_slot, device)
 x_val, y_val = data_transform(val, n_his, n_pred, day_slot, device)
 x_test, y_test = data_transform(test, n_his, n_pred, day_slot, device)
-resolution = x_train.shape[0] // (cov.shape[0] - 1)
 
 # Data Loader
 train_data = data.TensorDataset(x_train, y_train)
