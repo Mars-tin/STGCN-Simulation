@@ -29,7 +29,6 @@ def get_covariance():
     n_train, n_val, n_test = 34, 5, 5
     n_his = 12
     n_pred = 3
-    n_route = 228
     rho = 0.02
     resolution = 1000
 
@@ -42,9 +41,9 @@ def get_covariance():
 
     # Process data
     f = open(save_path, 'ab')
-    for i in range(x_train.shape[0] // resolution):
+    for i in range(n_x // resolution + 1):
         start = i*resolution
-        end = min(x_train.shape[0], (i+1)*resolution)
+        end = min(n_x, (i+1)*resolution)
         idx = (start + end) // 2
         x = x_train[idx]
         x = x.squeeze().to(device="cpu")
@@ -59,6 +58,7 @@ def get_covariance():
 
     os.remove(x_temp_path)
     os.remove(w_temp_path)
+    f.close()
 
 
 if __name__ == '__main__':
