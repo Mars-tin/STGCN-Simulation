@@ -94,9 +94,10 @@ def evaluate_model(model, loss_fn, data_iter, cov, resolution, batch_size):
         for x, y in data_iter:
             y_pred = model(x).view(len(x), -1)
             if hasattr(loss_fn, 'requires_cov'):
-                sigma = slice_covariance(cov, resolution, batch_size, iter)
+                sigma = cov[iter * batch_size // resolution]
                 iter += 1
                 l = loss_fn(y_pred, y, sigma)
+                l = torch.sum(l)
             else:
                 l = loss_fn(y_pred, y)
             l_sum += l.item() * y.shape[0]

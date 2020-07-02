@@ -73,7 +73,7 @@ Lk = cheb_poly(L, Ks)
 Lk = torch.from_numpy(Lk).float().to(device)
 # cov: covariance of training data
 cov = load_matrix(adj_path).reshape((-1, n_route, n_route))
-cov = torch.tensor(cov)
+cov = torch.tensor(cov).to(device)
 
 # Standardization
 train, val, test = load_data(data_path, n_train * day_slot, n_val * day_slot)
@@ -101,7 +101,7 @@ loss_fn = nn.MSELoss()
 if loss_function == "copula":
     loss_fn = CopulaLoss()
 criterion = nn.MSELoss()
-model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device)
+model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device=device)
 optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.7)
 
@@ -124,12 +124,11 @@ for tau in tau_list:
             iter = 0
             for x, y in train_iter:
                 y_pred = model(x).view(len(x), -1)
-                X = x.numpy().squeeze()
                 if hasattr(loss_fn, 'requires_cov'):
-                    # sigma = slice_covariance(cov, resolution, batch_size, iter)
                     sigma = cov[iter * batch_size // resolution]
                     iter += 1
-                    loss = np.sum(loss_fn(y_pred, y, sigma))
+                    loss = loss_fn(y_pred, y, sigma)
+                    loss = torch.sum(loss)
                 else:
                     loss = loss_fn(y_pred, y)
                 optimizer.zero_grad()
