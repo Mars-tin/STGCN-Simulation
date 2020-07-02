@@ -1,10 +1,8 @@
 import random
 import os
 import zipfile
-import torch
 import torch.utils.data as data
-import numpy as np
-import pandas as pd
+
 from sklearn.preprocessing import StandardScaler
 from load_data import *
 from utils import *
@@ -60,7 +58,7 @@ batch_size = 50
 epochs = 50
 lr = 1e-3
 
-loss_function = "mse"
+loss_function = "copula"
 density = 30
 tau_list = [0.01, 0.1, 1]
 gamma_list = [0.1, 1]
@@ -74,8 +72,8 @@ L = scaled_laplacian(W)
 Lk = cheb_poly(L, Ks)
 Lk = torch.from_numpy(Lk).float().to(device)
 # cov: covariance of training data
-cov = load_matrix(adj_path)
-cov = cov.reshape((-1, n_route, n_route))
+cov = load_matrix(adj_path).reshape((-1, n_route, n_route))
+cov = torch.tensor(cov)
 
 # Standardization
 train, val, test = load_data(data_path, n_train * day_slot, n_val * day_slot)
@@ -128,9 +126,10 @@ for tau in tau_list:
                 y_pred = model(x).view(len(x), -1)
                 X = x.numpy().squeeze()
                 if hasattr(loss_fn, 'requires_cov'):
-                    sigma = slice_covariance(cov, resolution, batch_size, iter)
+                    # sigma = slice_covariance(cov, resolution, batch_size, iter)
+                    sigma = cov[iter * batch_size // resolution]
                     iter += 1
-                    loss = loss_fn(y_pred, y, sigma)
+                    loss = np.sum(loss_fn(y_pred, y, sigma))
                 else:
                     loss = loss_fn(y_pred, y)
                 optimizer.zero_grad()
