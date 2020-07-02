@@ -10,6 +10,7 @@ from load_data import *
 from utils import *
 from stgcn import *
 from gaussian_copula import CopulaLoss
+from get_covariance import get_covariance
 
 # CUDNN setup
 torch.backends.cudnn.deterministic = True
@@ -26,14 +27,17 @@ random.seed(seed)
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 print(device)
 
-if (not os.path.isfile("data/W_228.csv")
-        or not os.path.isfile("data/V_228.csv")):
-    with zipfile.ZipFile("data/PeMS-M.zip", 'r') as zip_ref:
-        zip_ref.extractall("data/")
+# Get files ready
 matrix_path = "data/W_228.csv"
 data_path = "data/V_228.csv"
 adj_path = "data/cov_228.csv"
 save_path = "save/model.pt"
+if (not os.path.isfile(matrix_path)
+        or not os.path.isfile(data_path)):
+    with zipfile.ZipFile("data/PeMS-M.zip", 'r') as zip_ref:
+        zip_ref.extractall("data/")
+if not os.path.isfile(adj_path):
+    get_covariance()
 
 # Parameters
 day_slot = 288
