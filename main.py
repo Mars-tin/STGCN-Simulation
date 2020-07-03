@@ -48,7 +48,8 @@ matrix_path = "data/W_228.csv"
 data_path = "data/V_228.csv"
 adj_path = "data/cov_228.csv"
 save_path = "save/model.pt"
-resolution = 100
+batch_size = 20
+resolution = 20
 
 if (not os.path.isfile(matrix_path)
         or not os.path.isfile(data_path)):
@@ -57,15 +58,10 @@ if (not os.path.isfile(matrix_path)
 if not os.path.isfile(adj_path):
     get_covariance(rho=rho, resolution=resolution, n_his=n_his)
 
-
-batch_size = 50
 epochs = 50
 lr = 1e-3
 
-loss_function = "copula"
-density = 30
-tau_list = [0.01, 0.1, 1]
-gamma_list = [0.1, 1]
+loss_functions = ["copula", "mse"]
 
 # Graph
 # W: weight adjacency matrix
@@ -99,63 +95,60 @@ val_iter = data.DataLoader(val_data, batch_size)
 test_data = data.TensorDataset(x_test, y_test)
 test_iter = data.DataLoader(test_data, batch_size)
 
-# Loss_fn, criterion, model, optimizer and LR scheduler
-loss_fn = nn.MSELoss()
-if loss_function == "copula":
-    loss_fn = CopulaLoss()
-criterion = nn.MSELoss()
-model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device=device)
-optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.7)
+df = {"batch": [], "pred": [], "seed": [], "loss": [], "MAE": [], "MAPE": [], "RMSE": []}
 
-df = {"tau": [], "gamma": [], "MAE": [], "MAPE": [], "RMSE": []}
+for loss_function in loss_functions:
+    df["batch"].append(batch_size)
+    df["pred"].append(n_pred * 5)
+    df["seed"].append(seed)
+    df["loss"].append(loss_function)
 
-if loss_function == "mse":
-    tau_list = [0.1]
-    gamma_list = [0.1]
+    # criterion, model, optimizer and LR scheduler
+    criterion = nn.MSELoss()
+    model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device=device)
+    optimizer = torch.optim.RMSprop(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.7)
 
-for tau in tau_list:
-    for gamma in gamma_list:
-        df["tau"].append(tau)
-        df["gamma"].append(gamma)
+    loss_fn = nn.MSELoss()
+    if loss_function == "copula":
+        loss_fn = CopulaLoss()
 
-        # Training
-        min_val_loss = np.inf
-        for epoch in range(1, epochs + 1):
-            loss_sum, n = 0.0, 0
-            model.train()
-            iter = 0
-            for x, y in train_iter:
-                y_pred = model(x).view(len(x), -1)
-                if hasattr(loss_fn, 'requires_cov'):
-                    sigma = cov[iter * batch_size // resolution]
-                    iter += 1
-                    loss = loss_fn(y_pred, y, sigma)
-                    loss = torch.sum(loss)
-                else:
-                    loss = loss_fn(y_pred, y)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                loss_val = criterion(y_pred, y).item()
-                loss_sum += loss_val * y.shape[0]
-                n += y.shape[0]
-            scheduler.step()
-            val_loss = evaluate_model(model, loss_fn, val_iter, cov, resolution, batch_size)
-            if val_loss < min_val_loss:
-                min_val_loss = val_loss
-                torch.save(model.state_dict(), save_path)
-            print("epoch", epoch, ", train loss:", loss_sum / n, ", validation loss:", val_loss)
+    # Training
+    min_val_loss = np.inf
+    for epoch in range(1, epochs + 1):
+        loss_sum, n = 0.0, 0
+        model.train()
+        iter = 0
+        for x, y in train_iter:
+            y_pred = model(x).view(len(x), -1)
+            if hasattr(loss_fn, 'requires_cov'):
+                sigma = cov[iter]
+                iter += 1
+                loss = loss_fn(y_pred, y, sigma)
+            else:
+                loss = loss_fn(y_pred, y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            loss_val = criterion(y_pred, y).item()
+            loss_sum += loss_val * y.shape[0]
+            n += y.shape[0]
+        scheduler.step()
+        val_loss = evaluate_model(model, criterion, val_iter)
+        if val_loss < min_val_loss:
+            min_val_loss = val_loss
+            torch.save(model.state_dict(), save_path)
+        print("epoch", epoch, ", train loss:", loss_sum / n, ", validation loss:", val_loss)
 
-        best_model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device)
-        best_model.load_state_dict(torch.load(save_path))
+    best_model = STGCN(Ks, Kt, blocks, n_his, n_route, Lk, drop_prob).to(device)
+    best_model.load_state_dict(torch.load(save_path))
 
-        loss = evaluate_model(best_model, loss_fn, test_iter, cov, resolution, batch_size)
-        MAE, MAPE, RMSE = evaluate_metric(best_model, test_iter, scaler)
-        print("test loss:", loss, "\nMAE:", MAE, ", MAPE:", MAPE, ", RMSE:", RMSE)
-        df["MAE"].append(MAE)
-        df["MAPE"].append(MAPE)
-        df["RMSE"].append(RMSE)
+    loss = evaluate_model(best_model, criterion, test_iter)
+    MAE, MAPE, RMSE = evaluate_metric(best_model, test_iter, scaler)
+    print("test loss:", loss, "\nMAE:", MAE, ", MAPE:", MAPE, ", RMSE:", RMSE)
+    df["MAE"].append(MAE)
+    df["MAPE"].append(MAPE)
+    df["RMSE"].append(RMSE)
 
 pd_writer = pd.DataFrame(df)
 pd_writer.to_csv('output.csv', index=False, header=False)

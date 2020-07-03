@@ -86,20 +86,13 @@ def cheb_poly(L, Ks):
     return np.asarray(LL)
 
 
-def evaluate_model(model, loss_fn, data_iter, cov, resolution, batch_size):
+def evaluate_model(model, loss_fn, data_iter):
     model.eval()
     l_sum, n = 0.0, 0
     with torch.no_grad():
-        iter = 0
         for x, y in data_iter:
             y_pred = model(x).view(len(x), -1)
-            if hasattr(loss_fn, 'requires_cov'):
-                sigma = cov[iter * batch_size // resolution]
-                iter += 1
-                l = loss_fn(y_pred, y, sigma)
-                l = torch.sum(l)
-            else:
-                l = loss_fn(y_pred, y)
+            l = loss_fn(y_pred, y)
             l_sum += l.item() * y.shape[0]
             n += y.shape[0]
         return l_sum / n

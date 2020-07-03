@@ -100,4 +100,7 @@ class CopulaLoss(Module):
         nll_c = nll_copula(pred, target, sigma)
         normal = Normal(loc=pred, scale=torch.diag(sigma).pow(0.5))
         nll_q = -normal.log_prob(target)
-        return nll_c + nll_q.sum()
+        ret = nll_c + nll_q.sum()
+        if len(ret.shape) != 0:
+            ret = torch.sum(ret)
+        return ret

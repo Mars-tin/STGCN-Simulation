@@ -5,7 +5,7 @@ from sklearn.preprocessing import StandardScaler
 from load_data import *
 
 
-def get_covariance(rho=0.02, resolution=100, n_his=12):
+def get_covariance(rho=0.02, resolution=20, n_his=12):
     # Set device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -43,6 +43,7 @@ def get_covariance(rho=0.02, resolution=100, n_his=12):
         end = min(n_x, (i+1)*resolution)
         idx = (start + end) // 2
         x = x_train[idx]
+
         x = x.squeeze().to(device="cpu")
         x = x.t().matmul(x).numpy()
         np.savetxt(x_temp_path, x, delimiter=",")
