@@ -102,5 +102,5 @@ class CopulaLoss(Module):
         nll_q = -normal.log_prob(target)
         ret = nll_c + nll_q.sum()
         if len(ret.shape) != 0:
-            ret = torch.sum(ret)
+            ret = torch.mean(ret)
         return ret

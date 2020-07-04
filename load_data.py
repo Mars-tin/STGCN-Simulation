@@ -10,11 +10,14 @@ def load_matrix(file_path):
     return pd.read_csv(file_path, header=None).values.astype(float)
 
 
-def load_data(file_path, len_train, len_val):
+def load_data(file_path, len_train, len_val, len_test=None):
     df = pd.read_csv(file_path, header=None).values.astype(float)
     train = df[: len_train]
     val = df[len_train: len_train + len_val]
-    test = df[len_train + len_val:]
+    if len_test is not None:
+        test = df[len_train + len_val:len_train + len_val + len_test]
+    else:
+        test = df[len_train + len_val:]
     return train, val, test
 
 

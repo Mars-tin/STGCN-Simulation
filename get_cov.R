@@ -11,6 +11,7 @@ x_csv = read.csv(in_path, sep=",", header=FALSE)
 x <- as.matrix(x_csv)
 dimnames(x) <- list(NULL, NULL)
 sigma <- var(x)
+print(sigma)
 out <- glasso(sigma, rho=rho_, nobs=nobs_)
 w <- out[[1]]
 write.table(x = w, file = out_path, sep = ',', row.names = FALSE, col.names = FALSE)

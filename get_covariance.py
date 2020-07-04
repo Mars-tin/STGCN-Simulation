@@ -45,7 +45,7 @@ def get_covariance(rho=0.02, resolution=20, n_his=12):
         x = x_train[idx]
 
         x = x.squeeze().to(device="cpu")
-        x = x.t().matmul(x).numpy()
+        # x = x.t().matmul(x).numpy()
         np.savetxt(x_temp_path, x, delimiter=",")
         cmd = f'Rscript get_cov.R {x_temp_path} {w_temp_path} {rho} {n_his}'
         print('Estimating covariance for the {}th-{}th x in x_train...'.format(start, end))
